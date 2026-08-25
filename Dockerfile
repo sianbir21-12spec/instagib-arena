@@ -1,38 +1,30 @@
-# Instagib Arena — multi-stage image.
-#
-# Build stage: install everything (incl. dev deps) and produce the client
-# bundle in dist/. Runtime stage: a lean image with only production deps
-# (tsx survives the prune because the server runs `tsx server/index.ts`),
-# the built client, the server, and the THREE-free shared game modules.
+# Instagib Arena — Zeabur single-service image.
+# One container serves the web client, HTTP APIs, and WebSocket game.
 
-# --- build: compile the client bundle ---------------------------------------
-FROM node:20.19-bookworm-slim AS build
+FROM node:20.19-bookworm-slim
+
 WORKDIR /app
-# Install deps first so this layer caches across source-only changes.
+
+# better-sqlite3 may need to compile from source when a prebuilt binary is
+# unavailable, so keep the native build toolchain in the image.
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends python3 make g++ \
+    && rm -rf /var/lib/apt/lists/*
+
+# Install all dependencies, including Vite (a devDependency), so the client
+# build is deterministic on Zeabur regardless of build-time NODE_ENV.
 COPY package*.json ./
-RUN npm ci
+ENV NODE_ENV=development
+RUN npm ci --include=dev
+
 COPY . .
 RUN npm run build
 
-# --- runtime: serve dist/ + the game/stats server ---------------------------
-FROM node:20.19-bookworm-slim AS runtime
-WORKDIR /app
-ENV NODE_ENV=production \
-    PORT=8787
-# Production deps only. better-sqlite3 pulls a prebuilt linux/Node 20 binary
-# (prebuild-install), so no C/C++ toolchain is needed here.
-COPY package*.json ./
-RUN npm ci --omit=dev
-# Built client, the server, and the shared game modules the server imports at
-# runtime (src/game/{constants,arena-data,types}.ts). tsconfig* lets tsx resolve
-# the project's module settings.
-COPY --from=build /app/dist ./dist
-COPY server ./server
-COPY src/game ./src/game
-COPY tsconfig*.json ./
-EXPOSE 8787
-# The SQLite stats DB lives at /app/data — mount a persistent volume there so it
-# survives container churn. On Railway, attach a Railway Volume at /app/data
-# (the platform rejects a Dockerfile `VOLUME`); for plain Docker, bind-mount it:
-# `docker run -v "$PWD/data:/app/data" …`.
+ENV NODE_ENV=production
+ENV HOST=0.0.0.0
+
+# Zeabur supplies PORT at runtime; server/index.ts validates it and falls back
+# safely when the platform variable is absent/invalid.
+EXPOSE 8080
+
 CMD ["npm", "start"]
