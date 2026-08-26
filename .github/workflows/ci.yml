@@ -19,7 +19,5 @@ jobs:
       - run: npm ci
       - run: npm run typecheck
       - run: npm run build
-      # The large client may carry lint warnings; surface them without
-      # failing the build.
+      # Lint is part of validation; warnings are fine, lint errors are not.
       - run: npm run lint
-        continue-on-error: true
