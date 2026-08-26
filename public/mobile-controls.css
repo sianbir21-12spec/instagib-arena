@@ -1,0 +1,59 @@
+/* Mobile FPS control deck. Hidden by default; enabled only on coarse/touch devices during a match. */
+.mobile-controls { display:none; }
+@media (pointer: coarse), (hover: none) {
+  .mobile-controls {
+    position: fixed;
+    inset: 0;
+    z-index: 70;
+    display: block;
+    pointer-events: none;
+    touch-action: none;
+    user-select: none;
+    -webkit-user-select: none;
+    -webkit-touch-callout: none;
+    padding: env(safe-area-inset-top) env(safe-area-inset-right) env(safe-area-inset-bottom) env(safe-area-inset-left);
+    font-family: 'Geist Mono', ui-monospace, monospace;
+  }
+  .mobile-controls:not(.is-game) { display:none; }
+  .mobile-stick-zone,
+  .mobile-aim-zone { position:absolute; inset:0; pointer-events:auto; touch-action:none; }
+  .mobile-stick-zone { width:48%; height:58%; top:auto; bottom:0; }
+  .mobile-aim-zone { left:44%; width:56%; height:78%; }
+  .mobile-joystick {
+    position:absolute; left:clamp(18px,7vw,72px); bottom:clamp(20px,7vw,64px);
+    width:clamp(104px,25vw,170px); height:clamp(104px,25vw,170px);
+    border:2px solid rgba(255,255,255,.22); border-radius:50%;
+    background:radial-gradient(circle,rgba(34,211,238,.13),rgba(0,0,0,.24) 68%,rgba(0,0,0,.08));
+    box-shadow:inset 0 0 30px rgba(34,211,238,.08),0 8px 30px rgba(0,0,0,.3);
+    pointer-events:auto; touch-action:none;
+  }
+  .mobile-joystick::after { content:'MOVE'; position:absolute; inset:0; display:grid; place-items:center; color:rgba(255,255,255,.28); font-size:10px; letter-spacing:.2em; pointer-events:none; }
+  .mobile-joystick-knob {
+    position:absolute; left:50%; top:50%; width:42%; height:42%; margin:-21%; border-radius:50%;
+    background:rgba(34,211,238,.28); border:2px solid rgba(103,232,249,.7); box-shadow:0 0 20px rgba(34,211,238,.22);
+    will-change:transform; pointer-events:none;
+  }
+  .mobile-actions { position:absolute; right:clamp(12px,4vw,48px); bottom:clamp(14px,4vw,40px); width:clamp(170px,36vw,260px); height:clamp(210px,46vw,330px); pointer-events:none; }
+  .mobile-action {
+    position:absolute; display:grid; place-items:center; border:1px solid rgba(255,255,255,.24); border-radius:50%;
+    color:#fff; background:rgba(10,10,12,.68); backdrop-filter:blur(8px); -webkit-backdrop-filter:blur(8px);
+    font:700 clamp(9px,2.5vw,12px)/1 'Geist Mono',monospace; letter-spacing:.08em;
+    min-width:52px; min-height:52px; width:clamp(56px,14vw,82px); height:clamp(56px,14vw,82px);
+    pointer-events:auto; touch-action:none; -webkit-tap-highlight-color:transparent; transition:transform .06s,background .06s,border-color .06s;
+  }
+  .mobile-action.is-active { transform:scale(.93); background:rgba(34,211,238,.35); border-color:rgba(103,232,249,.9); }
+  .mobile-fire { right:0; bottom:22%; width:clamp(76px,18vw,100px); height:clamp(76px,18vw,100px); background:rgba(239,68,68,.28); border-color:rgba(248,113,113,.55); }
+  .mobile-jump { right:30%; bottom:47%; }
+  .mobile-dash { right:58%; bottom:29%; }
+  .mobile-boost { right:30%; bottom:2%; }
+  .mobile-score { right:66%; top:2%; width:52px; height:52px; min-width:52px; min-height:52px; border-radius:14px; }
+  .mobile-aim-hint { position:absolute; right:18%; top:48%; color:rgba(255,255,255,.13); font-size:9px; letter-spacing:.16em; pointer-events:none; }
+  .mobile-rotate-prompt { display:none; position:absolute; inset:0; align-items:center; justify-content:center; flex-direction:column; gap:10px; text-align:center; background:rgba(4,5,7,.93); color:#fff; padding:32px; pointer-events:auto; }
+  .mobile-rotate-icon { font-size:48px; color:#67e8f9; }
+  .mobile-rotate-prompt strong { font:700 14px 'Chakra Petch',sans-serif; letter-spacing:.16em; color:#a5f3fc; }
+  .mobile-rotate-prompt span { max-width:260px; font-size:11px; color:rgba(255,255,255,.55); }
+  @media (orientation: portrait) and (max-width: 700px) { .mobile-rotate-prompt { display:flex; } }
+  @media (max-width:380px) { .mobile-actions { transform:scale(.88); transform-origin:right bottom; } .mobile-joystick { transform:scale(.9); transform-origin:left bottom; } }
+  @media (min-width:700px) { .mobile-action { transform:scale(1.08); } }
+}
+@media (prefers-reduced-motion: reduce) { .mobile-action { transition:none; } }
