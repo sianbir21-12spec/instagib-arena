@@ -5,6 +5,7 @@ on:
     branches:
       - main
       - Test_branch
+      - mobile-friendly
   pull_request:
 
 jobs:
@@ -19,5 +20,4 @@ jobs:
       - run: npm ci
       - run: npm run typecheck
       - run: npm run build
-      # Lint is part of validation; warnings are fine, lint errors are not.
       - run: npm run lint
