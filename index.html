@@ -45,6 +45,20 @@
         <p><a href="/play">Play Instagib Arena</a>.</p>
       </main>
     </noscript>
+    <!-- The legacy lobby used a touch-device gate because it had no touch
+         controls. Mobile now has a real touch input layer, so make that legacy
+         capability probe report a non-coarse pointer to the React lobby while
+         preserving maxTouchPoints for the mobile control bootstrap. -->
+    <script>
+      (() => {
+        const original = window.matchMedia?.bind(window);
+        if (!original) return;
+        window.matchMedia = (query) => {
+          if (query === '(pointer: coarse)') return { matches: false, media: query, onchange: null, addListener() {}, removeListener() {}, addEventListener() {}, removeEventListener() {}, dispatchEvent() { return false; } };
+          return original(query);
+        };
+      })();
+    </script>
     <script type="module" src="/src/main.tsx"></script>
     <script src="/mobile-controls.js" defer></script>
   </body>
