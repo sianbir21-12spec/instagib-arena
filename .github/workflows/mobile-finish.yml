@@ -1,0 +1,175 @@
+name: Mobile V2 Integration
+
+on:
+  push:
+    branches: [mobile-friendly-v2]
+    paths-ignore:
+      - '.github/workflows/mobile-finish.yml'
+
+permissions:
+  contents: write
+
+jobs:
+  integrate:
+    if: ${{ !contains(github.event.head_commit.message, 'chore(mobile): apply final integration') }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: mobile-friendly-v2
+          fetch-depth: 0
+      - name: Apply mobile integration
+        shell: python
+        run: |
+          from pathlib import Path
+
+          def replace_once(path, old, new):
+              p = Path(path)
+              s = p.read_text()
+              if new in s:
+                  return False
+              if old not in s:
+                  raise SystemExit(f'anchor not found in {path}: {old[:120]!r}')
+              p.write_text(s.replace(old, new, 1))
+              return True
+
+          replace_once(
+              'src/game/input.ts',
+              "  // Toggle chat-typing mode: the game ignores all input while on (and held keys\n",
+              "  // Touch controls intentionally bypass pointer-lock requirements on mobile while\n  // still entering the same authoritative InputState consumed by the simulation.\n  setTouchAction(action: 'forward' | 'back' | 'left' | 'right' | 'jump' | 'dash' | 'boost' | 'fire', down: boolean) {\n    this.state[action] = down;\n  }\n\n  addTouchLook(yaw: number, pitch: number) {\n    if (this.chatting || !Number.isFinite(yaw) || !Number.isFinite(pitch)) return;\n    this.accumYaw += Math.max(-MAX_LOOK_DELTA_RAD, Math.min(MAX_LOOK_DELTA_RAD, yaw));\n    this.accumPitch += Math.max(-MAX_LOOK_DELTA_RAD, Math.min(MAX_LOOK_DELTA_RAD, pitch));\n  }\n\n  setTouchScoreboard(down: boolean) {\n    this.state.scoreboard = down;\n  }\n\n  // Toggle chat-typing mode: the game ignores all input while on (and held keys\n"
+          )
+
+          replace_once(
+              'src/game/game.ts',
+              "import { InputManager } from './input';\n",
+              "import { InputManager } from './input';\nimport { attachMobileControls, isTouchDevice, type MobileControlHandle } from './mobile-controls';\n"
+          )
+          replace_once(
+              'src/game/game.ts',
+              '  private input: InputManager;\n',
+              '  private input: InputManager;\n  private mobileControls: MobileControlHandle | null = null;\n'
+          )
+          replace_once(
+              'src/game/game.ts',
+              '    void this.audio.init();\n',
+              "    if (isTouchDevice()) {\n      this.mobileControls = attachMobileControls(canvas, {\n        setAction: (action, down) => this.input.setTouchAction(action, down),\n        addLook: (yaw, pitch) => this.input.addTouchLook(yaw, pitch),\n        setScoreboard: (down) => this.input.setTouchScoreboard(down),\n      });\n    }\n    void this.audio.init();\n"
+          )
+          replace_once(
+              'src/game/game.ts',
+              '  setRawInput(on: boolean) {\n    this.input.setRawInput(on);\n  }\n',
+              '  setRawInput(on: boolean) {\n    this.input.setRawInput(on);\n  }\n\n  setMobileScoreboard(down: boolean) {\n    this.input.setTouchScoreboard(down);\n  }\n'
+          )
+
+          Path('src/game/mobile-controls.ts').write_text('''import type { InputState } from './types';
+
+type Action = keyof Pick<InputState, 'forward' | 'back' | 'left' | 'right' | 'jump' | 'dash' | 'boost' | 'fire'>;
+type TouchPoint = { x: number; y: number };
+type MobileControlCallbacks = {
+  setAction: (action: Action, down: boolean) => void;
+  addLook: (yaw: number, pitch: number) => void;
+  setScoreboard: (down: boolean) => void;
+};
+export type MobileControlHandle = { destroy: () => void; reset: () => void };
+
+const LOOK_SENSITIVITY = 0.0045;
+
+export function isTouchDevice(): boolean {
+  return typeof window !== 'undefined' && (navigator.maxTouchPoints > 0 || 'ontouchstart' in window);
+}
+
+function button(label: string, className: string): HTMLButtonElement {
+  const b = document.createElement('button');
+  b.type = 'button';
+  b.textContent = label;
+  b.className = `mobile-control ${className}`;
+  b.setAttribute('aria-label', label);
+  return b;
+}
+
+export function attachMobileControls(canvas: HTMLCanvasElement, callbacks: MobileControlCallbacks): MobileControlHandle {
+  const root = canvas.parentElement ?? document.body;
+  const layer = document.createElement('div');
+  layer.className = 'mobile-controls';
+  layer.setAttribute('aria-label', 'Mobile game controls');
+  layer.innerHTML = '<div class="mobile-look-zone" aria-hidden="true"></div><div class="mobile-joystick" aria-hidden="true"><div class="mobile-joystick-knob"></div></div><div class="mobile-action-cluster"></div><button type="button" class="mobile-control mobile-scoreboard" aria-label="Scoreboard">TAB</button><div class="mobile-orientation-warning"><div><strong>ROTATE DEVICE</strong><br/><span>Landscape is recommended for competitive play.</span></div></div>';
+  root.appendChild(layer);
+
+  const cluster = layer.querySelector('.mobile-action-cluster') as HTMLElement;
+  const fire = button('FIRE', 'mobile-action-fire');
+  const jump = button('JUMP', 'mobile-action-jump');
+  const dash = button('DASH', 'mobile-action-dash');
+  const boost = button('BOOST', 'mobile-action-boost');
+  cluster.append(fire, jump, dash, boost);
+  const score = layer.querySelector('.mobile-scoreboard') as HTMLButtonElement;
+  const joystick = layer.querySelector('.mobile-joystick') as HTMLElement;
+  const knob = layer.querySelector('.mobile-joystick-knob') as HTMLElement;
+
+  const pointers = new Map<number, TouchPoint>();
+  let lookPointer: number | null = null;
+  let joystickPointer: number | null = null;
+  let joystickOrigin: TouchPoint | null = null;
+
+  const setButton = (el: HTMLElement, action: Action, down: boolean) => {
+    el.dataset.active = String(down);
+    callbacks.setAction(action, down);
+  };
+  const bindHold = (el: HTMLElement, action: Action) => {
+    const press = (e: PointerEvent) => { if (e.pointerType === 'touch') { e.preventDefault(); el.setPointerCapture(e.pointerId); setButton(el, action, true); } };
+    const release = (e: PointerEvent) => { if (e.pointerType === 'touch') { e.preventDefault(); setButton(el, action, false); try { if (el.hasPointerCapture(e.pointerId)) el.releasePointerCapture(e.pointerId); } catch {} } };
+    el.addEventListener('pointerdown', press, { passive: false });
+    el.addEventListener('pointerup', release, { passive: false });
+    el.addEventListener('pointercancel', release, { passive: false });
+    el.addEventListener('lostpointercapture', release, { passive: false });
+  };
+  bindHold(fire, 'fire'); bindHold(jump, 'jump'); bindHold(dash, 'dash'); bindHold(boost, 'boost');
+
+  const scoreDown = (e: PointerEvent) => { if (e.pointerType === 'touch') { e.preventDefault(); callbacks.setScoreboard(true); score.dataset.active = 'true'; } };
+  const scoreUp = (e: PointerEvent) => { if (e.pointerType === 'touch') { e.preventDefault(); callbacks.setScoreboard(false); score.dataset.active = 'false'; } };
+  score.addEventListener('pointerdown', scoreDown, { passive: false }); score.addEventListener('pointerup', scoreUp, { passive: false }); score.addEventListener('pointercancel', scoreUp, { passive: false });
+
+  const reset = () => {
+    pointers.clear(); lookPointer = null; joystickPointer = null; joystickOrigin = null;
+    knob.style.transform = 'translate(0,0)';
+    (['forward','back','left','right','jump','dash','boost','fire'] as Action[]).forEach(a => callbacks.setAction(a, false));
+    [fire,jump,dash,boost].forEach(b => b.dataset.active = 'false');
+    callbacks.setScoreboard(false); score.dataset.active = 'false';
+  };
+
+  const down = (e: PointerEvent) => {
+    if (e.pointerType !== 'touch') return;
+    e.preventDefault(); pointers.set(e.pointerId, { x: e.clientX, y: e.clientY });
+    if (e.clientX < window.innerWidth * 0.42 && joystickPointer === null) { joystickPointer = e.pointerId; joystickOrigin = { x: e.clientX, y: e.clientY }; return; }
+    if (lookPointer === null) lookPointer = e.pointerId;
+  };
+  const move = (e: PointerEvent) => {
+    if (e.pointerType !== 'touch') return; const prev = pointers.get(e.pointerId); if (!prev) return; e.preventDefault(); pointers.set(e.pointerId, { x: e.clientX, y: e.clientY });
+    if (e.pointerId === lookPointer) { callbacks.addLook((e.clientX-prev.x)*LOOK_SENSITIVITY, (e.clientY-prev.y)*LOOK_SENSITIVITY); return; }
+    if (e.pointerId === joystickPointer && joystickOrigin) {
+      const dx=e.clientX-joystickOrigin.x, dy=e.clientY-joystickOrigin.y, radius=62;
+      const nx=Math.max(-1,Math.min(1,dx/radius)), ny=Math.max(-1,Math.min(1,dy/radius));
+      callbacks.setAction('left', nx < -.2); callbacks.setAction('right', nx > .2); callbacks.setAction('forward', ny < -.2); callbacks.setAction('back', ny > .2);
+      const mag=Math.min(1,Math.hypot(dx,dy)/radius); const ang=Math.atan2(dy,dx); knob.style.transform=`translate(${Math.cos(ang)*mag*32}px,${Math.sin(ang)*mag*32}px)`;
+    }
+  };
+  const release = (e: PointerEvent) => {
+    if (e.pointerType !== 'touch') return; pointers.delete(e.pointerId);
+    if (e.pointerId === joystickPointer) { joystickPointer=null; joystickOrigin=null; callbacks.setAction('forward',false); callbacks.setAction('back',false); callbacks.setAction('left',false); callbacks.setAction('right',false); knob.style.transform='translate(0,0)'; }
+    if (e.pointerId === lookPointer) lookPointer=null;
+  };
+  const onVisibility = () => { if (document.hidden) reset(); };
+  canvas.addEventListener('pointerdown', down, { passive:false }); canvas.addEventListener('pointermove', move, { passive:false }); canvas.addEventListener('pointerup', release); canvas.addEventListener('pointercancel', release); canvas.addEventListener('lostpointercapture', release);
+  window.addEventListener('blur', reset); document.addEventListener('visibilitychange', onVisibility);
+
+  return { reset, destroy: () => { reset(); canvas.removeEventListener('pointerdown',down); canvas.removeEventListener('pointermove',move); canvas.removeEventListener('pointerup',release); canvas.removeEventListener('pointercancel',release); canvas.removeEventListener('lostpointercapture',release); window.removeEventListener('blur',reset); document.removeEventListener('visibilitychange',onVisibility); layer.remove(); } };
+}
+''')
+
+          marker = Path('.mobile-v2-integrated')
+          marker.write_text('integrated')
+      - name: Commit integration
+        run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add src/game/input.ts src/game/game.ts src/game/mobile-controls.ts .mobile-v2-integrated
+          git diff --cached --quiet || git commit -m 'chore(mobile): apply final integration'
+          git push origin mobile-friendly-v2
