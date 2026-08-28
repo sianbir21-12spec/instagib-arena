@@ -25,6 +25,6 @@ ENV HOST=0.0.0.0
 
 # Zeabur supplies PORT at runtime; server/index.ts validates it and falls back
 # safely when the platform variable is absent/invalid.
-EXPOSE 8080
+EXPOSE 4000
 
 CMD ["npm", "start"]
