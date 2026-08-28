@@ -1,0 +1,1 @@
+Mobile V2 final integration trigger. The automated integration workflow applies the touch-control bridge to the game engine on `mobile-friendly-v2`. This file is intentionally temporary and can be removed after validation.
