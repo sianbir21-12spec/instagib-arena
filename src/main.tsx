@@ -2,6 +2,7 @@ import { lazy, Suspense } from 'react';
 import { createRoot } from 'react-dom/client';
 import { BrowserRouter, Routes, Route } from 'react-router-dom';
 import './index.css';
+import './firebase';
 import './game/mobile-patch';
 import Landing from './pages/Landing';
 
