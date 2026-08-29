@@ -4,9 +4,7 @@
   "private": true,
   "type": "module",
   "description": "Browser-based, server-authoritative Quake-style instagib FPS. Three.js client + Node WebSocket game server.",
-  "engines": {
-    "node": ">=20.19.0"
-  },
+  "engines": { "node": ">=20.19.0" },
   "scripts": {
     "predev": "node scripts/ensure-native.mjs",
     "dev": "concurrently -k -n web,server -c cyan,magenta \"vite\" \"tsx watch server/index.ts\"",
@@ -27,6 +25,7 @@
   "dependencies": {
     "better-sqlite3": "12.8.0",
     "cookie-parser": "^1.4.7",
+    "firebase": "12.18.0",
     "express": "^4.21.2",
     "react": "19.2.4",
     "react-dom": "19.2.4",
