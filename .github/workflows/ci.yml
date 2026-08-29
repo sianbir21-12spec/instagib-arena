@@ -12,7 +12,9 @@ jobs:
         with:
           node-version: '20.19.0'
           cache: 'npm'
-      - run: npm ci
+      # Firebase was added after the existing lockfile was generated.
+      # npm install refreshes the lock graph before validation.
+      - run: npm install
       - run: npm run typecheck
       - run: npm run build
       - run: npm run lint
