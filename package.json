@@ -4,9 +4,7 @@
   "private": true,
   "type": "module",
   "description": "Browser-based, server-authoritative Quake-style instagib FPS. Three.js client + Node WebSocket game server.",
-  "engines": {
-    "node": ">=20.19.0"
-  },
+  "engines": { "node": ">=22.0.0" },
   "scripts": {
     "predev": "node scripts/ensure-native.mjs",
     "dev": "concurrently -k -n web,server -c cyan,magenta \"vite\" \"tsx watch server/index.ts\"",
