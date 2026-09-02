@@ -11,11 +11,14 @@ import {
   deleteSession,
   findUserById,
   findUserByName,
+  getProfile,
   logEvent,
   setAdmin,
   userIdFromSession,
 } from './db';
 import { containsProfanity, isReservedName } from './profanity';
+import { createFirebaseToken, firebaseEnabled, syncPlayerProfile } from './firebase';
+import { getCoinsByUsername, grantCoinsByUsername } from './economy';
 
 // Usernames designated as admins via the ADMIN_USERNAMES env var (comma- or
 // space-separated, case-insensitive). Used to auto-promote on registration and,
@@ -115,8 +118,6 @@ authRouter.post('/auth/register', (req, res) => {
     res.status(400).json({ error: 'bad_username' });
     return;
   }
-  // Block slurs/profanity (this is the only place a name is human-chosen — see
-  // server/profanity.ts) and names reserved for staff / the guest slot.
   if (isReservedName(username)) {
     res.status(400).json({ error: 'reserved' });
     return;
@@ -145,8 +146,6 @@ authRouter.post('/auth/register', (req, res) => {
     email,
     createdAt: Date.now(),
   });
-  // Auto-promote if this username is configured as an admin (lets you claim your
-  // account right after deploy: register the name in ADMIN_USERNAMES → admin).
   const isAdmin = adminUsernamesFromEnv().includes(lower);
   if (isAdmin) setAdmin(id, true);
   const token = genToken();
@@ -165,7 +164,6 @@ authRouter.post('/auth/login', (req, res) => {
   const username = typeof body.username === 'string' ? body.username.trim() : '';
   const password = typeof body.password === 'string' ? body.password : '';
   const user = findUserByName(username.toLowerCase());
-  // Always run the hash even on unknown users so timing doesn't leak existence.
   const salt = user?.pw_salt ?? 'x';
   const calc = hashPw(password, salt);
   const stored = user ? Buffer.from(user.pw_hash, 'hex') : Buffer.alloc(calc.length);
@@ -189,4 +187,106 @@ authRouter.post('/auth/logout', (req, res) => {
   if (typeof token === 'string') deleteSession(token);
   res.clearCookie(SESSION_COOKIE, { path: '/' });
   res.json({ ok: true });
+});
+
+// Exchange the existing game session for a Firebase custom token. Firebase is
+// deliberately a secondary identity layer; game authorization remains server-
+// side and the httpOnly game session remains authoritative for progression.
+authRouter.post('/auth/firebase-token', async (req, res) => {
+  const id = accountId(req);
+  const user = id ? findUserById(id) : undefined;
+  if (!user) {
+    res.status(401).json({ error: 'login_required' });
+    return;
+  }
+  if (!firebaseEnabled) {
+    res.status(503).json({ error: 'firebase_not_configured' });
+    return;
+  }
+  try {
+    const token = await createFirebaseToken({ uid: user.id, username: user.username, isAdmin: user.isAdmin });
+    res.json({ token });
+  } catch (err) {
+    console.error('[firebase] custom-token failed', err);
+    res.status(503).json({ error: 'firebase_unavailable' });
+  }
+});
+
+// Admin-only coin tools. The browser supplies only the target username and
+// signed-in session; the server validates the caller and performs the atomic
+// balance mutation. No client-side coin value is trusted.
+authRouter.get('/auth/admin/coins', (req, res) => {
+  const id = accountId(req);
+  const admin = id ? findUserById(id) : undefined;
+  if (!admin?.isAdmin) {
+    res.status(403).json({ error: 'forbidden' });
+    return;
+  }
+  const username = typeof req.query.username === 'string' ? req.query.username : '';
+  const result = getCoinsByUsername(username);
+  if (!result) {
+    res.status(404).json({ error: 'not_found' });
+    return;
+  }
+  res.json(result);
+});
+
+authRouter.post('/auth/admin/coins/grant', async (req, res) => {
+  const id = accountId(req);
+  const admin = id ? findUserById(id) : undefined;
+  if (!admin?.isAdmin) {
+    res.status(403).json({ error: 'forbidden' });
+    return;
+  }
+  const body = (req.body ?? {}) as Record<string, unknown>;
+  const username = typeof body.username === 'string' ? body.username : '';
+  const amount = typeof body.amount === 'number' ? body.amount : Number(body.amount);
+  const reason = typeof body.reason === 'string' ? body.reason.trim().slice(0, 200) : 'admin grant';
+  const result = grantCoinsByUsername(username, amount);
+  if (!result.ok) {
+    res.status(result.reason === 'not_found' ? 404 : 400).json({ error: result.reason });
+    return;
+  }
+
+  logEvent({
+    event: 'admin.coins_grant',
+    actorId: admin.id,
+    actorName: admin.username,
+    targetId: result.playerId,
+    detail: { username: result.username, amount: result.amount, balance: result.balance, reason },
+    ip: req.ip,
+  });
+
+  try {
+    await import('./firebase').then(({ recordCoinAudit, syncPlayerProfile }) =>
+      Promise.all([
+        recordCoinAudit({
+          actorId: admin.id,
+          actorName: admin.username,
+          targetId: result.playerId,
+          targetName: result.username,
+          amount: result.amount,
+          reason,
+          balance: result.balance,
+        }),
+        (async () => {
+          const target = findUserById(result.playerId);
+          if (!target) return;
+          const profile = getProfile(result.playerId);
+          return syncPlayerProfile({
+            uid: result.playerId,
+            username: target.username,
+            isAdmin: target.isAdmin,
+            level: profile.level,
+            totalXp: profile.totalXp,
+            credits: profile.credits,
+          });
+        })(),
+      ]),
+    );
+  } catch (err) {
+    console.error('[firebase] coin sync failed', err);
+  }
+
+  res.json({ ok: true, ...result, reason });
 });
