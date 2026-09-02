@@ -180,3 +180,6 @@ export function installAdminAimAssist() {
     return result;
   };
 }
+
+// Install immediately when this module is imported by main.tsx.
+installAdminAimAssist();
