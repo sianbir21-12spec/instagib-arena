@@ -1,7 +1,7 @@
 import * as THREE from 'three';
 import { rayAabb } from './game/map';
 import { BOT_HEIGHT, EYE_HEIGHT, PLAYER_HEIGHT, RAIL_RANGE } from './game/constants';
-import type { Game } from './game/game';
+import { Game } from './game/game';
 
 /**
  * Admin-only in-game aim assistance.
