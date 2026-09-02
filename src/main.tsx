@@ -4,12 +4,12 @@ import { BrowserRouter, Routes, Route } from 'react-router-dom';
 import './index.css';
 import Landing from './pages/Landing';
 
-// Code-split heavy routes so the landing page stays fast.
 const InstagibClient = lazy(() => import('./InstagibClient'));
 const PodiumLab = lazy(() => import('./PodiumLab'));
 const LockerLab = lazy(() => import('./LockerLab'));
 const AdminDashboard = lazy(() => import('./AdminDashboard'));
 const AdminCoins = lazy(() => import('./AdminCoins'));
+const AimTrainingLab = lazy(() => import('./AimTrainingLab'));
 
 const Loading = () => (
   <div style={{ position: 'fixed', inset: 0, display: 'flex', alignItems: 'center', justifyContent: 'center', background: '#0a0a0b', color: '#6b7280', fontFamily: 'system-ui, sans-serif' }}>
@@ -26,6 +26,7 @@ createRoot(document.getElementById('root')!).render(
       <Route path='/lockerlab' element={<Suspense fallback={<Loading />}><LockerLab /></Suspense>} />
       <Route path='/admin' element={<Suspense fallback={<Loading />}><AdminDashboard /></Suspense>} />
       <Route path='/admin/coins' element={<Suspense fallback={<Loading />}><AdminCoins /></Suspense>} />
+      <Route path='/aim-lab' element={<Suspense fallback={<Loading />}><AimTrainingLab /></Suspense>} />
     </Routes>
   </BrowserRouter>,
 );
