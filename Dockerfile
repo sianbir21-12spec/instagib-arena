@@ -1,7 +1,7 @@
 # Instagib Arena — Zeabur single-service image.
 # One container serves the web client, HTTP APIs, and WebSocket game.
 
-FROM node:20.19-bookworm-slim
+FROM node:22-bookworm-slim
 
 WORKDIR /app
 
@@ -11,11 +11,13 @@ RUN apt-get update \
     && apt-get install -y --no-install-recommends python3 make g++ \
     && rm -rf /var/lib/apt/lists/*
 
-# Install all dependencies, including Vite (a devDependency), so the client
-# build is deterministic on Zeabur regardless of build-time NODE_ENV.
+# package.json was updated with Firebase dependencies, while an older
+# package-lock may still be present. Use npm install so npm can reconcile and
+# regenerate the lockfile during the container build instead of failing npm ci
+# on a package-lock/package.json mismatch.
 COPY package*.json ./
 ENV NODE_ENV=development
-RUN npm ci --include=dev
+RUN npm install --include=dev
 
 COPY . .
 RUN npm run build
