@@ -7,7 +7,7 @@ import Landing from './pages/Landing';
 const InstagibClient = lazy(() => import('./InstagibClient'));
 const PodiumLab = lazy(() => import('./PodiumLab'));
 const LockerLab = lazy(() => import('./LockerLab'));
-const AdminDashboard = lazy(() => import('./AdminDashboard'));
+const AdminPanel = lazy(() => import('./AdminPanel'));
 const AdminCoins = lazy(() => import('./AdminCoins'));
 const AimTrainingLab = lazy(() => import('./AimTrainingLab'));
 
@@ -24,7 +24,7 @@ createRoot(document.getElementById('root')!).render(
       <Route path='/play' element={<Suspense fallback={<Loading />}><InstagibClient /></Suspense>} />
       <Route path='/podiumlab' element={<Suspense fallback={<Loading />}><PodiumLab /></Suspense>} />
       <Route path='/lockerlab' element={<Suspense fallback={<Loading />}><LockerLab /></Suspense>} />
-      <Route path='/admin' element={<Suspense fallback={<Loading />}><AdminDashboard /></Suspense>} />
+      <Route path='/admin' element={<Suspense fallback={<Loading />}><AdminPanel /></Suspense>} />
       <Route path='/admin/coins' element={<Suspense fallback={<Loading />}><AdminCoins /></Suspense>} />
       <Route path='/aim-lab' element={<Suspense fallback={<Loading />}><AimTrainingLab /></Suspense>} />
     </Routes>
