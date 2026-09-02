@@ -1,10 +1,11 @@
-const MAX_RECORDING_MS = 15_000;
+const MAX_RECORDING_MS = 60_000;
 const BUTTON_ID = 'instagib-clip-record-button';
 
 let recorder: MediaRecorder | null = null;
 let chunks: Blob[] = [];
 let stopTimer: number | null = null;
 let button: HTMLButtonElement | null = null;
+let canvas: HTMLCanvasElement | null = null;
 
 function setButton(recording: boolean) {
   if (!button) return;
@@ -46,7 +47,8 @@ function stopRecording(save = true) {
   active.stop();
 }
 
-function startRecording(canvas: HTMLCanvasElement) {
+function startRecording() {
+  if (!canvas) return;
   if (recorder?.state === 'recording') {
     stopRecording(true);
     return;
@@ -85,15 +87,14 @@ function startRecording(canvas: HTMLCanvasElement) {
   recorder.start(250);
   setButton(true);
 
-  // Automatically finish a clip after 15 seconds so a forgotten recording
-  // cannot consume memory indefinitely. The player can save earlier with the
-  // same button or Ctrl+Shift+R.
+  // Keep the recording running for up to one minute. Press I again or click
+  // SAVE CLIP to finish earlier.
   stopTimer = window.setTimeout(() => stopRecording(true), MAX_RECORDING_MS);
 }
 
 function mount() {
   if (button || typeof document === 'undefined') return;
-  const canvas = document.querySelector<HTMLCanvasElement>('canvas');
+  canvas = document.querySelector<HTMLCanvasElement>('canvas');
   if (!canvas) {
     window.setTimeout(mount, 500);
     return;
@@ -102,7 +103,7 @@ function mount() {
   button = document.createElement('button');
   button.id = BUTTON_ID;
   button.type = 'button';
-  button.title = 'Record a gameplay clip (Ctrl+Shift+R also works)';
+  button.title = 'Record a gameplay clip (I also works)';
   button.style.cssText = [
     'position:fixed', 'left:16px', 'top:16px', 'z-index:9998',
     'padding:9px 12px', 'border:1px solid rgba(34,211,238,.35)',
@@ -111,15 +112,16 @@ function mount() {
     'letter-spacing:.12em', 'text-transform:uppercase', 'color:#67e8f9',
     'cursor:pointer', 'box-shadow:0 0 24px rgba(34,211,238,.12)',
   ].join(';');
-  button.addEventListener('click', () => startRecording(canvas));
+  button.addEventListener('click', startRecording);
   document.body.appendChild(button);
   setButton(false);
 
   window.addEventListener('keydown', (event) => {
-    if (event.ctrlKey && event.shiftKey && event.code === 'KeyR') {
-      event.preventDefault();
-      startRecording(canvas);
-    }
+    if (event.repeat || event.code !== 'KeyI') return;
+    const target = event.target as HTMLElement | null;
+    if (target?.tagName === 'INPUT' || target?.tagName === 'TEXTAREA' || target?.isContentEditable) return;
+    event.preventDefault();
+    startRecording();
   });
 }
 
