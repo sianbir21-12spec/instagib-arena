@@ -4,7 +4,7 @@
 // Firebase Auth + Firestore as a cloud identity/profile mirror.
 
 import { applicationDefault, cert, getApps, initializeApp } from 'firebase-admin/app';
-import { getAuth } from 'firebase-admin/auth';
+import { getAuth, type UserRecord } from 'firebase-admin/auth';
 import { FieldValue, getFirestore } from 'firebase-admin/firestore';
 
 const projectId = process.env.FIREBASE_PROJECT_ID?.trim() || '';
@@ -34,6 +34,33 @@ function ensureFirebase(): void {
   initialized = true;
 }
 
+/**
+ * Firebase Auth requires a user record before custom claims can be assigned.
+ * Game accounts are authoritative, so Firebase users are created lazily from
+ * the stable game account id. This also makes existing accounts work without
+ * requiring a separate Firebase sign-up flow.
+ */
+async function ensureFirebaseUser(input: {
+  uid: string;
+  username: string;
+  isAdmin: boolean;
+}): Promise<UserRecord> {
+  const auth = getAuth();
+  try {
+    return await auth.getUser(input.uid);
+  } catch (err: unknown) {
+    const code = typeof err === 'object' && err !== null && 'code' in err
+      ? String((err as { code?: unknown }).code)
+      : '';
+    if (code !== 'auth/user-not-found') throw err;
+
+    return auth.createUser({
+      uid: input.uid,
+      displayName: input.username,
+    });
+  }
+}
+
 export async function createFirebaseToken(input: {
   uid: string;
   username: string;
@@ -42,6 +69,12 @@ export async function createFirebaseToken(input: {
   if (!firebaseEnabled) return null;
   ensureFirebase();
   const auth = getAuth();
+
+  // Create the Firebase Auth record if this game account has never been
+  // mirrored before. Without this, setCustomUserClaims throws
+  // "There is no user record corresponding to the provided identifier."
+  await ensureFirebaseUser(input);
+
   await auth.setCustomUserClaims(input.uid, {
     gameUsername: input.username,
     admin: input.isAdmin,
