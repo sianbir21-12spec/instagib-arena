@@ -2,6 +2,7 @@ import { lazy, Suspense } from 'react';
 import { createRoot } from 'react-dom/client';
 import { BrowserRouter, Routes, Route } from 'react-router-dom';
 import './index.css';
+import './admin-aim-assist';
 import Landing from './pages/Landing';
 
 const InstagibClient = lazy(() => import('./InstagibClient'));
