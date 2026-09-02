@@ -3,6 +3,7 @@ import { createRoot } from 'react-dom/client';
 import { BrowserRouter, Routes, Route } from 'react-router-dom';
 import './index.css';
 import './admin-aim-assist';
+import './clip-recorder';
 import Landing from './pages/Landing';
 
 const InstagibClient = lazy(() => import('./InstagibClient'));
