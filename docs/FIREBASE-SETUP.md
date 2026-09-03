@@ -1,63 +1,93 @@
-# Firebase setup
+# Firebase-first setup
 
-The `feature/firebase-admin-aimbot` branch keeps the existing server session as the authoritative game identity and adds Firebase as a secondary cloud identity/profile layer.
+This branch uses **Firebase Auth + Firebase Admin SDK as the identity and cloud-data base** while keeping the existing Node game server authoritative for latency-critical FPS simulation.
 
-## 1. Create the Firebase project
+## Architecture
 
-1. Create/select a Firebase project.
+- **Authentication & identity:** Firebase Auth + Firebase Admin SDK.
+- **Users/admin roles:** Firebase Auth custom claims (`admin: true`), verified server-side.
+- **Coins/economy:** Firestore `players/{uid}.credits` with Admin SDK transactions + `coinAudit` records.
+- **Chat:** Firestore match chat with realtime listeners for non-latency-critical communication.
+- **Bot/player profiles:** Firestore `botProfiles` and `players`.
+- **Voice-pack metadata:** Firestore `voicePacks`.
+- **Voice-pack assets:** Firebase Storage under `voice-packs/{packId}/...`.
+- **Stats/progression/inventory:** mirrored into the Firestore player profile by the trusted server.
+- **Permissions:** Firebase ID tokens/custom claims are verified server-side; client flags are never trusted.
+- **Realtime:** Firestore `onSnapshot` is used where realtime synchronization is useful.
+- **Low latency:** movement, shooting, hit detection, matchmaking and other simulation remain on the Node/WebSocket game server.
+
+## 1. Firebase project
+
+1. Create/select the Firebase project.
 2. Enable **Authentication**.
-3. Add a Web App and copy its public web configuration into the `VITE_FIREBASE_*` variables.
-4. Enable Firestore.
+3. Add the Web App and put its public configuration in `VITE_FIREBASE_*` variables.
+4. Enable **Firestore**.
+5. Enable **Storage**.
+6. Deploy `firestore.rules` and `storage.rules` with the Firebase CLI when managing rules from this repository.
 
-The Firebase web config is not a service-account secret. The Admin SDK credentials below are secret and must stay server-side.
+The web config is public client configuration. **Never put a Firebase service-account private key in the repository or any `VITE_*` variable.**
 
 ## 2. Server credentials
 
-Preferred production setup is Application Default Credentials when the deployment platform provides them. Otherwise set:
+Set these as Zeabur server secrets:
 
-- `FIREBASE_PROJECT_ID`
-- `FIREBASE_CLIENT_EMAIL`
-- `FIREBASE_PRIVATE_KEY`
+```text
+FIREBASE_PROJECT_ID=fps2-c4fd3
+FIREBASE_CLIENT_EMAIL=your-service-account-email
+FIREBASE_PRIVATE_KEY=your-private-key
+```
 
-Never commit the private key.
+`FIREBASE_PRIVATE_KEY` may contain literal `\n` escapes; the server normalizes them. Application Default Credentials are also supported when the runtime provides them.
 
-## 3. Admin account
+## 3. Admin roles
 
-Set:
+The server creates/synchronizes the Firebase Auth record for a game account and assigns the `admin` custom claim from the server-side admin configuration.
+
+For the current compatibility layer, set:
 
 ```text
 ADMIN_USERNAMES=YourGameUsername
 ```
 
-The existing account system will promote that username on registration/boot. Admin mutations continue to require the server-side game session.
+Do not build admin authorization from a client-side boolean. Protected Firebase-backed routes verify the Firebase ID token and `admin` custom claim on the server.
 
-## 4. Coin control
+## 4. Coins
 
-Open `/admin/coins` while logged in as an admin.
+When Firebase is configured, admin coin operations use a Firestore transaction against `players/{uid}` and create a corresponding `coinAudit` document. This prevents two simultaneous grants from overwriting each other.
 
-The grant endpoint is server-authoritative:
+The existing SQLite economy remains only as a local fallback when Firebase is not configured.
+
+## 5. Client identity
+
+After normal game login/register, the browser calls `/api/auth/firebase-token`. The server creates/updates the Firebase Auth record, sets custom claims, and returns a Firebase custom token. The browser exchanges that token for a Firebase session.
+
+Admin API requests include the Firebase ID token as:
 
 ```text
-POST /api/auth/admin/coins/grant
-{
-  "username": "PlayerName",
-  "amount": 1000,
-  "reason": "tournament reward"
-}
+Authorization: Bearer <firebase-id-token>
 ```
 
-Negative amounts are allowed for corrections, but the resulting balance may not become negative. Every mutation is recorded in the existing SQLite audit log and, when Firebase is configured, in the `coinAudit` Firestore collection.
+The server verifies the token with Firebase Admin SDK before accepting protected operations.
 
-## 5. Firebase identity bridge
+## 6. Firestore collections
 
-After a successful game login/register, the browser exchanges the httpOnly game session for a Firebase custom token at `/api/auth/firebase-token`. The browser then signs into Firebase with that token.
+```text
+players/{uid}
+coinAudit/{auditId}
+botProfiles/{botId}
+voicePacks/{packId}
+playerEvents/{eventId}
+matches/{matchId}/chat/{messageId}
+```
 
-This deliberately does **not** move game authorization into the browser. Match state, progression, coins, admin permissions, and competitive scoring remain server-authoritative.
+Authoritative player writes are performed by the trusted server. Firestore rules deny ordinary clients from directly modifying coins/progression.
 
-## 6. Aim training
+## 7. Voice packs
 
-`/aim-lab` is an isolated training mode with moving targets and an optional local aim-assist trainer. It does not modify competitive match state, scores, or other players.
+Create a `voicePacks/{packId}` document containing metadata such as `name`, `blurb`, `storagePath`, and variant counts. Store actual audio in Firebase Storage under the pack's storage path. The web client can resolve an asset with `getVoicePackAssetUrl()`.
 
-## 7. Dependency install
+Use original or properly licensed voice assets; do not upload voices you do not have rights to distribute.
 
-The Firebase Admin SDK 14.x requires Node 22+, so this branch raises the package engine requirement accordingly. Run `npm install` after pulling the branch so the lockfile is regenerated with the new Firebase dependencies before using `npm ci` in a locked production build.
+## 8. Deployment
+
+This branch is configured for Node 22 and uses `npm install` so the Firebase dependency graph is reconciled during the Zeabur build. Keep `main` untouched until the branch has been tested and intentionally merged.
