@@ -1,4 +1,12 @@
 import { useEffect, useState } from 'react';
+import { getFirebaseIdToken } from './firebase';
+
+async function adminFetch(input: RequestInfo | URL, init: RequestInit = {}): Promise<Response> {
+  const token = await getFirebaseIdToken();
+  const headers = new Headers(init.headers);
+  if (token) headers.set('Authorization', `Bearer ${token}`);
+  return fetch(input, { ...init, headers, credentials: 'same-origin' });
+}
 
 export default function AdminCoins() {
   const [ready, setReady] = useState(false);
@@ -21,7 +29,7 @@ export default function AdminCoins() {
   const lookup = async () => {
     setMessage('');
     setBalance(null);
-    const r = await fetch(`/api/auth/admin/coins?username=${encodeURIComponent(username.trim())}`, { credentials: 'same-origin' });
+    const r = await adminFetch(`/api/auth/admin/coins?username=${encodeURIComponent(username.trim())}`);
     const d = await r.json().catch(() => ({}));
     if (!r.ok) {
       setMessage(d.error === 'not_found' ? 'Player not found.' : 'Unable to look up player.');
@@ -35,10 +43,9 @@ export default function AdminCoins() {
     setBusy(true);
     setMessage('');
     try {
-      const r = await fetch('/api/auth/admin/coins/grant', {
+      const r = await adminFetch('/api/auth/admin/coins/grant', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        credentials: 'same-origin',
         body: JSON.stringify({ username: username.trim(), amount: Number(amount), reason: reason.trim() || 'admin grant' }),
       });
       const d = await r.json().catch(() => ({}));
@@ -62,7 +69,7 @@ export default function AdminCoins() {
         <div className='mb-8'>
           <p className='text-[10px] font-bold uppercase tracking-[0.25em] text-cyan-300'>Admin economy</p>
           <h1 className='mt-2 text-3xl font-black tracking-tight'>Coin control</h1>
-          <p className='mt-2 text-sm text-white/45'>Server-authoritative grants. Every mutation is audit logged and mirrored to Firebase when configured.</p>
+          <p className='mt-2 text-sm text-white/45'>Firebase-authoritative grants. Every mutation is transactionally recorded in the Firebase audit log.</p>
         </div>
         <section className='rounded-2xl border border-white/10 bg-white/[0.03] p-6 shadow-2xl'>
           <label className='block text-[10px] font-bold uppercase tracking-[0.2em] text-white/40'>Player username</label>
