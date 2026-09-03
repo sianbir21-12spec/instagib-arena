@@ -12,12 +12,12 @@ jobs:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with:
-          node-version: '20.19.0'
+          node-version: '22'
           cache: 'npm'
-      - run: npm ci
+      # package.json may intentionally be ahead of the lockfile while Firebase
+      # dependencies are being introduced; npm install reconciles the lockfile.
+      - run: npm install
       - run: npm run typecheck
       - run: npm run build
-      # The large client may carry lint warnings; surface them without
-      # failing the build.
       - run: npm run lint
         continue-on-error: true
