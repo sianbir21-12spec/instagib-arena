@@ -1,11 +1,12 @@
 // Firebase Web SDK bridge. Firebase Auth is the client identity layer. Firestore
 // is used for non-latency-critical chat, bot profiles, voice-pack metadata and
-// player state; the authoritative game server remains responsible for movement,
-// shooting, hit detection and matchmaking.
+// player state; Firebase Storage is used for voice-pack assets. The authoritative
+// game server remains responsible for movement, shooting, hit detection and matchmaking.
 
 import { getApp, getApps, initializeApp } from 'firebase/app';
 import { getAuth, onAuthStateChanged, signInWithCustomToken, signOut, type User } from 'firebase/auth';
 import { addDoc, collection, doc, getFirestore, limit, onSnapshot, orderBy, query, serverTimestamp, setDoc, type Unsubscribe } from 'firebase/firestore';
+import { getDownloadURL, getStorage, ref } from 'firebase/storage';
 
 const config = {
   apiKey: (import.meta.env.VITE_FIREBASE_API_KEY as string | undefined) || 'AIzaSyA7wyEIBMV8j9MohStKnzseCXOqVP8rZ00',
@@ -19,6 +20,7 @@ const config = {
 export const firebaseClientEnabled = Boolean(config.apiKey && config.projectId && config.appId);
 let auth: ReturnType<typeof getAuth> | null = null;
 let db: ReturnType<typeof getFirestore> | null = null;
+let storage: ReturnType<typeof getStorage> | null = null;
 
 function getFirebaseApp() {
   if (!firebaseClientEnabled) return null;
@@ -36,6 +38,12 @@ function getFirebaseDb() {
   db ??= getFirestore(app);
   return db;
 }
+function getFirebaseStorage() {
+  const app = getFirebaseApp();
+  if (!app) return null;
+  storage ??= getStorage(app);
+  return storage;
+}
 
 export async function syncFirebaseSession(): Promise<void> {
   const firebaseAuth = getFirebaseAuth();
@@ -49,11 +57,7 @@ export async function syncFirebaseSession(): Promise<void> {
 export async function getFirebaseIdToken(): Promise<string | null> {
   const firebaseAuth = getFirebaseAuth();
   if (!firebaseAuth?.currentUser) return null;
-  try {
-    return await firebaseAuth.currentUser.getIdToken(true);
-  } catch {
-    return null;
-  }
+  try { return await firebaseAuth.currentUser.getIdToken(true); } catch { return null; }
 }
 
 export async function signOutFirebase(): Promise<void> {
@@ -92,9 +96,7 @@ export function subscribeMatchChat(matchId: string, callback: (messages: MatchCh
   const cleanMatch = matchId.trim().slice(0, 80);
   if (!cleanMatch) { callback([]); return () => {}; }
   const q = query(collection(firestore, 'matches', cleanMatch, 'chat'), orderBy('createdAt', 'desc'), limit(50));
-  return onSnapshot(q, (snapshot) => {
-    callback(snapshot.docs.map((item) => ({ id: item.id, ...(item.data() as Omit<MatchChatMessage, 'id'>) })).reverse());
-  }, () => callback([]));
+  return onSnapshot(q, (snapshot) => callback(snapshot.docs.map((item) => ({ id: item.id, ...(item.data() as Omit<MatchChatMessage, 'id'>) })).reverse()), () => callback([]));
 }
 
 export async function saveBotProfile(input: { id: string; name: string; difficulty: string; persona: string; metadata?: Record<string, unknown> }): Promise<void> {
@@ -117,17 +119,22 @@ export function subscribeVoicePacks(callback: (packs: VoicePack[]) => void): Uns
   const firestore = getFirebaseDb();
   if (!firestore) { callback([]); return () => {}; }
   const q = query(collection(firestore, 'voicePacks'), orderBy('name'), limit(50));
-  return onSnapshot(q, (snapshot) => {
-    callback(snapshot.docs.map((item) => ({ id: item.id, ...(item.data() as Omit<VoicePack, 'id'>) })));
-  }, () => callback([]));
+  return onSnapshot(q, (snapshot) => callback(snapshot.docs.map((item) => ({ id: item.id, ...(item.data() as Omit<VoicePack, 'id'>) }))), () => callback([]));
+}
+
+export async function getVoicePackAssetUrl(storagePath: string): Promise<string | null> {
+  const firebaseStorage = getFirebaseStorage();
+  const cleanPath = storagePath.trim().replace(/^\/+/, '');
+  if (!firebaseStorage || !cleanPath) return null;
+  try { return await getDownloadURL(ref(firebaseStorage, cleanPath)); } catch { return null; }
 }
 
 export async function syncPlayerState(input: { level: number; totalXp: number; credits: number; unlocked: string[]; equipped: Record<string, string>; stats: Record<string, unknown> }): Promise<void> {
   const firestore = getFirebaseDb();
   const user = getFirebaseAuth()?.currentUser;
   if (!firestore || !user) return;
-  // This helper is intentionally available for server-synchronized UI state only.
-  // Firestore rules prevent ordinary clients from overwriting authoritative player records.
+  // Authoritative writes are performed by the trusted server. Firestore rules
+  // prevent ordinary clients from overwriting these records.
   await setDoc(doc(firestore, 'players', user.uid), {
     level: input.level,
     totalXp: input.totalXp,
