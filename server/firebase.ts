@@ -6,6 +6,7 @@ import type { Request } from 'express';
 const projectId = process.env.FIREBASE_PROJECT_ID?.trim() || '';
 const clientEmail = process.env.FIREBASE_CLIENT_EMAIL?.trim() || '';
 const privateKey = process.env.FIREBASE_PRIVATE_KEY?.replace(/\\n/g, '\n').trim() || '';
+const databaseURL = process.env.FIREBASE_DATABASE_URL?.trim() || (projectId ? `https://${projectId}-default-rtdb.firebaseio.com` : '');
 
 export const firebaseEnabled = !!projectId;
 let initialized = false;
@@ -16,10 +17,11 @@ function ensureFirebase(): void {
     initialized = true;
     return;
   }
+  const options = databaseURL ? { projectId, databaseURL } : { projectId };
   if (clientEmail && privateKey) {
-    initializeApp({ credential: cert({ projectId, clientEmail, privateKey }), projectId });
+    initializeApp({ credential: cert({ projectId, clientEmail, privateKey }), ...options });
   } else {
-    initializeApp({ credential: applicationDefault(), projectId });
+    initializeApp({ credential: applicationDefault(), ...options });
   }
   initialized = true;
 }
