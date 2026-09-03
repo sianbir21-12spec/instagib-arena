@@ -24,20 +24,15 @@ import { authRouter, adminUsernamesFromEnv } from './auth';
 import { adminApiTokenEnabled, adminRouter, setLiveCountsSource } from './admin';
 import { syncAdminsFromEnv } from './db';
 import { attachInstagibWs } from './instagib-game';
+import { botChatRouter } from './bot-chat';
 
 const INSTAGIB_WS_PATH = '/ws/instagib';
 
-// Process-level safety net: a single uncaught throw (a `ws` internal error, a
-// timer callback, an unexpected exception) must NOT take the whole server — and
-// every connected player — down. Log and keep serving; the alpha favors uptime.
 process.on('uncaughtException', (err) => console.error('[fatal] uncaughtException', err));
 process.on('unhandledRejection', (reason) => console.error('[fatal] unhandledRejection', reason));
 
 const dev = process.env.NODE_ENV !== 'production';
 const host = process.env.HOST || (dev ? 'localhost' : '0.0.0.0');
-
-// Zeabur normally supplies PORT. Guard against an empty/non-numeric value so
-// Node never receives NaN and crashes with ERR_SOCKET_BAD_PORT.
 const parsedPort = Number.parseInt(process.env.PORT ?? '', 10);
 const port = Number.isInteger(parsedPort) && parsedPort >= 0 && parsedPort < 65536 ? parsedPort : 8080;
 if (!Number.isInteger(parsedPort) || parsedPort < 0 || parsedPort >= 65536) {
@@ -54,18 +49,10 @@ const isPrivateHost = (hostname: string): boolean => {
   const m = /^(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.\d{1,3}$/.exec(hostname);
   if (!m) return false;
   const [a, b] = [Number(m[1]), Number(m[2])];
-  return (
-    a === 10 ||
-    (a === 172 && b >= 16 && b <= 31) ||
-    (a === 192 && b === 168) ||
-    (a === 169 && b === 254)
-  );
+  return a === 10 || (a === 172 && b >= 16 && b <= 31) || (a === 192 && b === 168) || (a === 169 && b === 254);
 };
 
-const isAllowedWsOrigin = (
-  origin: string | undefined,
-  hostHeader: string,
-): boolean => {
+const isAllowedWsOrigin = (origin: string | undefined, hostHeader: string): boolean => {
   if (!origin) return dev;
   try {
     const originUrl = new URL(origin);
@@ -97,7 +84,7 @@ const CSP = [
   "script-src 'self'",
   "style-src 'self' 'unsafe-inline' https://fonts.googleapis.com",
   "font-src 'self' https://fonts.gstatic.com data:",
-  "connect-src 'self' blob: data:",
+  "connect-src 'self' blob: data: https://*.firebaseio.com https://*.googleapis.com wss://*.firebaseio.com",
   "worker-src 'self' blob:",
   "form-action 'self'",
 ].join('; ');
@@ -114,9 +101,7 @@ app.use((_req, res, next) => {
 app.use(cookieParser());
 app.use(express.json({ limit: '16kb' }));
 
-app.get('/api/health', (_req, res) => {
-  res.json({ ok: true, build: hasBuild });
-});
+app.get('/api/health', (_req, res) => res.json({ ok: true, build: hasBuild }));
 
 let liveCounts: () => {
   online: number;
@@ -127,6 +112,7 @@ let liveCounts: () => {
 } = () => ({ online: 0, inMatch: 0, rooms: 0, loopLagMs: 0, loopLagMaxMs: 0 });
 app.get('/api/live', (_req, res) => res.json(liveCounts()));
 app.use('/api', authRouter);
+app.use('/api', botChatRouter);
 app.use('/api', statsRouter);
 app.use('/api', leaderboardRouter);
 app.use('/api', rankedRouter);
@@ -175,7 +161,7 @@ if (hasBuild) {
   console.warn('[server] No dist/ build found. Run `npm run build` before `npm start`.');
 }
 
-app.use((err: Error & { type?: string; status?: number }, _req: express.Request, res: express.Response, _next: express.NextFunction) => {
+app.use((err: Error & { type?: string; status?: number }, _req, res, _next) => {
   if (err?.type === 'entity.too.large') {
     res.status(413).json({ error: 'payload_too_large' });
     return;
