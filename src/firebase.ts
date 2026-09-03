@@ -5,19 +5,7 @@
 
 import { getApp, getApps, initializeApp } from 'firebase/app';
 import { getAuth, onAuthStateChanged, signInWithCustomToken, signOut, type User } from 'firebase/auth';
-import {
-  addDoc,
-  collection,
-  doc,
-  getFirestore,
-  limit,
-  onSnapshot,
-  orderBy,
-  query,
-  serverTimestamp,
-  setDoc,
-  type Unsubscribe,
-} from 'firebase/firestore';
+import { addDoc, collection, doc, getFirestore, limit, onSnapshot, orderBy, query, serverTimestamp, setDoc, type Unsubscribe } from 'firebase/firestore';
 
 const config = {
   apiKey: (import.meta.env.VITE_FIREBASE_API_KEY as string | undefined) || 'AIzaSyA7wyEIBMV8j9MohStKnzseCXOqVP8rZ00',
@@ -36,14 +24,12 @@ function getFirebaseApp() {
   if (!firebaseClientEnabled) return null;
   return getApps().length ? getApp() : initializeApp(config);
 }
-
 function getFirebaseAuth() {
   const app = getFirebaseApp();
   if (!app) return null;
   auth ??= getAuth(app);
   return auth;
 }
-
 function getFirebaseDb() {
   const app = getFirebaseApp();
   if (!app) return null;
@@ -60,6 +46,16 @@ export async function syncFirebaseSession(): Promise<void> {
   if (data.token) await signInWithCustomToken(firebaseAuth, data.token);
 }
 
+export async function getFirebaseIdToken(): Promise<string | null> {
+  const firebaseAuth = getFirebaseAuth();
+  if (!firebaseAuth?.currentUser) return null;
+  try {
+    return await firebaseAuth.currentUser.getIdToken(true);
+  } catch {
+    return null;
+  }
+}
+
 export async function signOutFirebase(): Promise<void> {
   const firebaseAuth = getFirebaseAuth();
   if (!firebaseAuth) return;
@@ -68,21 +64,11 @@ export async function signOutFirebase(): Promise<void> {
 
 export function observeFirebaseUser(callback: (user: User | null) => void): Unsubscribe {
   const firebaseAuth = getFirebaseAuth();
-  if (!firebaseAuth) {
-    callback(null);
-    return () => {};
-  }
+  if (!firebaseAuth) { callback(null); return () => {}; }
   return onAuthStateChanged(firebaseAuth, callback);
 }
 
-export type MatchChatMessage = {
-  id: string;
-  uid: string;
-  username: string;
-  text: string;
-  bot: boolean;
-  createdAt: unknown;
-};
+export type MatchChatMessage = { id: string; uid: string; username: string; text: string; bot: boolean; createdAt: unknown };
 
 export async function sendMatchChatMessage(matchId: string, username: string, text: string, bot = false): Promise<void> {
   const firestore = getFirebaseDb();
@@ -102,32 +88,16 @@ export async function sendMatchChatMessage(matchId: string, username: string, te
 
 export function subscribeMatchChat(matchId: string, callback: (messages: MatchChatMessage[]) => void): Unsubscribe {
   const firestore = getFirebaseDb();
-  if (!firestore) {
-    callback([]);
-    return () => {};
-  }
+  if (!firestore) { callback([]); return () => {}; }
   const cleanMatch = matchId.trim().slice(0, 80);
-  if (!cleanMatch) {
-    callback([]);
-    return () => {};
-  }
-  const q = query(
-    collection(firestore, 'matches', cleanMatch, 'chat'),
-    orderBy('createdAt', 'desc'),
-    limit(50),
-  );
+  if (!cleanMatch) { callback([]); return () => {}; }
+  const q = query(collection(firestore, 'matches', cleanMatch, 'chat'), orderBy('createdAt', 'desc'), limit(50));
   return onSnapshot(q, (snapshot) => {
     callback(snapshot.docs.map((item) => ({ id: item.id, ...(item.data() as Omit<MatchChatMessage, 'id'>) })).reverse());
   }, () => callback([]));
 }
 
-export async function saveBotProfile(input: {
-  id: string;
-  name: string;
-  difficulty: string;
-  persona: string;
-  metadata?: Record<string, unknown>;
-}): Promise<void> {
+export async function saveBotProfile(input: { id: string; name: string; difficulty: string; persona: string; metadata?: Record<string, unknown> }): Promise<void> {
   const firestore = getFirebaseDb();
   if (!firestore) return;
   const id = input.id.trim().slice(0, 80);
@@ -141,37 +111,23 @@ export async function saveBotProfile(input: {
   }, { merge: true });
 }
 
-export type VoicePack = {
-  id: string;
-  name: string;
-  blurb: string;
-  storagePath?: string;
-  variants?: Record<string, number>;
-};
+export type VoicePack = { id: string; name: string; blurb: string; storagePath?: string; variants?: Record<string, number> };
 
 export function subscribeVoicePacks(callback: (packs: VoicePack[]) => void): Unsubscribe {
   const firestore = getFirebaseDb();
-  if (!firestore) {
-    callback([]);
-    return () => {};
-  }
+  if (!firestore) { callback([]); return () => {}; }
   const q = query(collection(firestore, 'voicePacks'), orderBy('name'), limit(50));
   return onSnapshot(q, (snapshot) => {
     callback(snapshot.docs.map((item) => ({ id: item.id, ...(item.data() as Omit<VoicePack, 'id'>) })));
   }, () => callback([]));
 }
 
-export async function syncPlayerState(input: {
-  level: number;
-  totalXp: number;
-  credits: number;
-  unlocked: string[];
-  equipped: Record<string, string>;
-  stats: Record<string, unknown>;
-}): Promise<void> {
+export async function syncPlayerState(input: { level: number; totalXp: number; credits: number; unlocked: string[]; equipped: Record<string, string>; stats: Record<string, unknown> }): Promise<void> {
   const firestore = getFirebaseDb();
   const user = getFirebaseAuth()?.currentUser;
   if (!firestore || !user) return;
+  // This helper is intentionally available for server-synchronized UI state only.
+  // Firestore rules prevent ordinary clients from overwriting authoritative player records.
   await setDoc(doc(firestore, 'players', user.uid), {
     level: input.level,
     totalXp: input.totalXp,
