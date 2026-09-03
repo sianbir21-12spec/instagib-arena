@@ -1,7 +1,6 @@
-// Account auth: guest-by-default, optional username/password account (Krunker
-// model). Progression keys off the account id — guests save nothing. Passwords
-// are scrypt-hashed (Node built-in, no dependency) with a per-user salt and
-// compared in constant time. The session is an opaque httpOnly cookie token.
+// Account auth: guest-by-default, optional username/password account. Firebase Admin
+// is the cloud identity/authorization and profile authority; the existing opaque
+// session remains as a compatibility layer for the current game protocol.
 
 import { Router, type Request } from 'express';
 import { randomBytes, scryptSync, timingSafeEqual } from 'node:crypto';
@@ -17,12 +16,17 @@ import {
   userIdFromSession,
 } from './db';
 import { containsProfanity, isReservedName } from './profanity';
-import { createFirebaseToken, firebaseEnabled, syncPlayerProfile } from './firebase';
+import {
+  createFirebaseToken,
+  findFirebasePlayerByUsername,
+  firebaseEnabled,
+  getFirebaseCoins,
+  grantFirebaseCoins,
+  requireFirebaseAdmin,
+  syncPlayerProfile,
+} from './firebase';
 import { getCoinsByUsername, grantCoinsByUsername } from './economy';
 
-// Usernames designated as admins via the ADMIN_USERNAMES env var (comma- or
-// space-separated, case-insensitive). Used to auto-promote on registration and,
-// on boot, to sync existing accounts (see syncAdminsFromEnv in server/index.ts).
 export function adminUsernamesFromEnv(): string[] {
   return (process.env.ADMIN_USERNAMES ?? '')
     .split(/[,\s]+/)
@@ -32,8 +36,7 @@ export function adminUsernamesFromEnv(): string[] {
 
 const SESSION_COOKIE = 'igsession';
 const USERNAME_RE = /^[a-zA-Z0-9_]{3,20}$/;
-const SESSION_MAX_AGE = 1000 * 60 * 60 * 24 * 365; // 1 year
-
+const SESSION_MAX_AGE = 1000 * 60 * 60 * 24 * 365;
 const cookieOpts = {
   httpOnly: true,
   sameSite: 'lax' as const,
@@ -42,25 +45,15 @@ const cookieOpts = {
   path: '/',
 };
 
-function hashPw(password: string, salt: string): Buffer {
-  return scryptSync(password, salt, 64);
-}
-function genId(): string {
-  return randomBytes(12).toString('hex');
-}
-function genToken(): string {
-  return randomBytes(32).toString('base64url');
-}
+function hashPw(password: string, salt: string): Buffer { return scryptSync(password, salt, 64); }
+function genId(): string { return randomBytes(12).toString('hex'); }
+function genToken(): string { return randomBytes(32).toString('base64url'); }
 
-// The account id behind a request's session cookie ('' = guest). This IS the
-// progression identity used by the stats API.
 export function accountId(req: Request): string {
   const token = req.cookies?.[SESSION_COOKIE];
   return typeof token === 'string' ? userIdFromSession(token) : '';
 }
 
-// Same, but from a raw `Cookie:` header — for the game WebSocket upgrade, which
-// doesn't go through Express's cookie parser.
 export function accountIdFromCookieHeader(header: string | undefined): string {
   if (!header) return '';
   for (const part of header.split(';')) {
@@ -73,7 +66,6 @@ export function accountIdFromCookieHeader(header: string | undefined): string {
   return '';
 }
 
-// Lightweight per-IP attempt limiter so register/login can't be brute-forced.
 const attempts = new Map<string, { n: number; resetAt: number }>();
 const ATTEMPT_WINDOW = 60_000;
 const ATTEMPT_MAX = 12;
@@ -91,75 +83,71 @@ setInterval(() => {
   for (const [ip, a] of attempts) if (now > a.resetAt) attempts.delete(ip);
 }, ATTEMPT_WINDOW).unref?.();
 
+async function syncAccount(uid: string): Promise<void> {
+  if (!firebaseEnabled) return;
+  const user = findUserById(uid);
+  if (!user) return;
+  const profile = getProfile(uid);
+  await syncPlayerProfile({
+    uid,
+    username: user.username,
+    isAdmin: user.isAdmin,
+    level: profile.level,
+    totalXp: profile.totalXp,
+    credits: profile.credits,
+    stats: {
+      totalKills: profile.totalKills,
+      totalDeaths: profile.totalDeaths,
+      totalGames: profile.totalGames,
+      totalWins: profile.totalWins,
+      bestKillStreak: profile.bestKillStreak,
+      headshots: profile.headshots,
+      shotsFired: profile.shotsFired,
+      shotsHit: profile.shotsHit,
+      bestAccuracy: profile.bestAccuracy,
+    },
+    inventory: {
+      unlocked: profile.unlocked,
+      equipped: profile.equipped,
+    },
+  });
+}
+
 export const authRouter = Router();
 
-// Who am I? → the account behind the session, or null (guest).
 authRouter.get('/auth/me', (req, res) => {
   const id = accountId(req);
   const user = id ? findUserById(id) : undefined;
-  res.json({
-    user: user
-      ? { username: user.username, isAdmin: user.isAdmin, isVerified: user.isVerified }
-      : null,
-  });
+  res.json({ user: user ? { username: user.username, isAdmin: user.isAdmin, isVerified: user.isVerified } : null });
 });
 
 authRouter.post('/auth/register', (req, res) => {
-  if (rateLimited(req.ip ?? 'unknown', Date.now())) {
-    res.status(429).json({ error: 'rate_limited' });
-    return;
-  }
+  if (rateLimited(req.ip ?? 'unknown', Date.now())) { res.status(429).json({ error: 'rate_limited' }); return; }
   const body = (req.body ?? {}) as Record<string, unknown>;
   const username = typeof body.username === 'string' ? body.username.trim() : '';
   const password = typeof body.password === 'string' ? body.password : '';
-  const email =
-    typeof body.email === 'string' && body.email.trim() ? body.email.trim().slice(0, 200) : null;
-  if (!USERNAME_RE.test(username)) {
-    res.status(400).json({ error: 'bad_username' });
-    return;
-  }
-  if (isReservedName(username)) {
-    res.status(400).json({ error: 'reserved' });
-    return;
-  }
-  if (containsProfanity(username)) {
-    res.status(400).json({ error: 'profane' });
-    return;
-  }
-  if (password.length < 6 || password.length > 200) {
-    res.status(400).json({ error: 'bad_password' });
-    return;
-  }
+  const email = typeof body.email === 'string' && body.email.trim() ? body.email.trim().slice(0, 200) : null;
+  if (!USERNAME_RE.test(username)) { res.status(400).json({ error: 'bad_username' }); return; }
+  if (isReservedName(username)) { res.status(400).json({ error: 'reserved' }); return; }
+  if (containsProfanity(username)) { res.status(400).json({ error: 'profane' }); return; }
+  if (password.length < 6 || password.length > 200) { res.status(400).json({ error: 'bad_password' }); return; }
   const lower = username.toLowerCase();
-  if (findUserByName(lower)) {
-    res.status(409).json({ error: 'taken' });
-    return;
-  }
+  if (findUserByName(lower)) { res.status(409).json({ error: 'taken' }); return; }
   const salt = randomBytes(16).toString('hex');
   const id = genId();
-  createUser({
-    id,
-    username,
-    usernameLower: lower,
-    pwHash: hashPw(password, salt).toString('hex'),
-    pwSalt: salt,
-    email,
-    createdAt: Date.now(),
-  });
+  createUser({ id, username, usernameLower: lower, pwHash: hashPw(password, salt).toString('hex'), pwSalt: salt, email, createdAt: Date.now() });
   const isAdmin = adminUsernamesFromEnv().includes(lower);
   if (isAdmin) setAdmin(id, true);
   const token = genToken();
   createSession(token, id, Date.now());
   res.cookie(SESSION_COOKIE, token, cookieOpts);
   logEvent({ event: 'register', actorId: id, actorName: username, ip: req.ip, detail: isAdmin ? { admin: true } : undefined });
+  void syncAccount(id).catch((err) => console.error('[firebase] profile sync failed', err));
   res.json({ user: { username, isAdmin, isVerified: false } });
 });
 
 authRouter.post('/auth/login', (req, res) => {
-  if (rateLimited(req.ip ?? 'unknown', Date.now())) {
-    res.status(429).json({ error: 'rate_limited' });
-    return;
-  }
+  if (rateLimited(req.ip ?? 'unknown', Date.now())) { res.status(429).json({ error: 'rate_limited' }); return; }
   const body = (req.body ?? {}) as Record<string, unknown>;
   const username = typeof body.username === 'string' ? body.username.trim() : '';
   const password = typeof body.password === 'string' ? body.password : '';
@@ -168,18 +156,14 @@ authRouter.post('/auth/login', (req, res) => {
   const calc = hashPw(password, salt);
   const stored = user ? Buffer.from(user.pw_hash, 'hex') : Buffer.alloc(calc.length);
   const ok = !!user && calc.length === stored.length && timingSafeEqual(calc, stored);
-  if (!ok) {
-    res.status(401).json({ error: 'invalid' });
-    return;
-  }
+  if (!ok) { res.status(401).json({ error: 'invalid' }); return; }
   const token = genToken();
   createSession(token, user!.id, Date.now());
   res.cookie(SESSION_COOKIE, token, cookieOpts);
   const acct = findUserById(user!.id);
   logEvent({ event: 'login', actorId: user!.id, actorName: user!.username, ip: req.ip });
-  res.json({
-    user: { username: user!.username, isAdmin: !!acct?.isAdmin, isVerified: !!acct?.isVerified },
-  });
+  void syncAccount(user!.id).catch((err) => console.error('[firebase] profile sync failed', err));
+  res.json({ user: { username: user!.username, isAdmin: !!acct?.isAdmin, isVerified: !!acct?.isVerified } });
 });
 
 authRouter.post('/auth/logout', (req, res) => {
@@ -189,22 +173,14 @@ authRouter.post('/auth/logout', (req, res) => {
   res.json({ ok: true });
 });
 
-// Exchange the existing game session for a Firebase custom token. Firebase is
-// deliberately a secondary identity layer; game authorization remains server-
-// side and the httpOnly game session remains authoritative for progression.
 authRouter.post('/auth/firebase-token', async (req, res) => {
   const id = accountId(req);
   const user = id ? findUserById(id) : undefined;
-  if (!user) {
-    res.status(401).json({ error: 'login_required' });
-    return;
-  }
-  if (!firebaseEnabled) {
-    res.status(503).json({ error: 'firebase_not_configured' });
-    return;
-  }
+  if (!user) { res.status(401).json({ error: 'login_required' }); return; }
+  if (!firebaseEnabled) { res.status(503).json({ error: 'firebase_not_configured' }); return; }
   try {
     const token = await createFirebaseToken({ uid: user.id, username: user.username, isAdmin: user.isAdmin });
+    await syncAccount(user.id);
     res.json({ token });
   } catch (err) {
     console.error('[firebase] custom-token failed', err);
@@ -212,81 +188,69 @@ authRouter.post('/auth/firebase-token', async (req, res) => {
   }
 });
 
-// Admin-only coin tools. The browser supplies only the target username and
-// signed-in session; the server validates the caller and performs the atomic
-// balance mutation. No client-side coin value is trusted.
-authRouter.get('/auth/admin/coins', (req, res) => {
+// Firebase Auth custom claims are the preferred admin authority. The legacy
+// session check remains as a local-development/compatibility fallback only when
+// Firebase is not configured.
+async function requireAdmin(req: Request): Promise<{ id: string; username: string } | null> {
+  if (firebaseEnabled) {
+    const token = await requireFirebaseAdmin(req);
+    if (!token?.uid) return null;
+    const user = findUserById(token.uid);
+    return user ? { id: user.id, username: user.username } : { id: token.uid, username: String(token.gameUsername ?? '') };
+  }
   const id = accountId(req);
-  const admin = id ? findUserById(id) : undefined;
-  if (!admin?.isAdmin) {
-    res.status(403).json({ error: 'forbidden' });
-    return;
-  }
+  const user = id ? findUserById(id) : undefined;
+  return user?.isAdmin ? { id: user.id, username: user.username } : null;
+}
+
+authRouter.get('/auth/admin/coins', async (req, res) => {
+  const admin = await requireAdmin(req);
+  if (!admin) { res.status(403).json({ error: 'forbidden' }); return; }
   const username = typeof req.query.username === 'string' ? req.query.username : '';
-  const result = getCoinsByUsername(username);
-  if (!result) {
-    res.status(404).json({ error: 'not_found' });
+  if (firebaseEnabled) {
+    const result = await findFirebasePlayerByUsername(username);
+    if (!result) { res.status(404).json({ error: 'not_found' }); return; }
+    res.json({ username: result.username, credits: result.credits });
     return;
   }
+  const result = getCoinsByUsername(username);
+  if (!result) { res.status(404).json({ error: 'not_found' }); return; }
   res.json(result);
 });
 
 authRouter.post('/auth/admin/coins/grant', async (req, res) => {
-  const id = accountId(req);
-  const admin = id ? findUserById(id) : undefined;
-  if (!admin?.isAdmin) {
-    res.status(403).json({ error: 'forbidden' });
-    return;
-  }
+  const admin = await requireAdmin(req);
+  if (!admin) { res.status(403).json({ error: 'forbidden' }); return; }
   const body = (req.body ?? {}) as Record<string, unknown>;
-  const username = typeof body.username === 'string' ? body.username : '';
+  const username = typeof body.username === 'string' ? body.username.trim() : '';
   const amount = typeof body.amount === 'number' ? body.amount : Number(body.amount);
   const reason = typeof body.reason === 'string' ? body.reason.trim().slice(0, 200) : 'admin grant';
-  const result = grantCoinsByUsername(username, amount);
-  if (!result.ok) {
-    res.status(result.reason === 'not_found' ? 404 : 400).json({ error: result.reason });
+
+  if (firebaseEnabled) {
+    const target = await findFirebasePlayerByUsername(username);
+    if (!target) { res.status(404).json({ error: 'not_found' }); return; }
+    try {
+      const result = await grantFirebaseCoins({ uid: target.uid, username: target.username, amount, actorId: admin.id, actorName: admin.username, reason });
+      logEvent({ event: 'admin.coins_grant', actorId: admin.id, actorName: admin.username, targetId: target.uid, detail: { username: target.username, amount: Math.trunc(amount), balance: result.balance, reason }, ip: req.ip });
+      res.json({ ok: true, playerId: target.uid, username: target.username, amount: Math.trunc(amount), balance: result.balance, reason });
+    } catch (err) {
+      const code = err instanceof Error ? err.message : 'coin_error';
+      const status = code === 'invalid_amount' || code === 'coin_overflow' ? 400 : 503;
+      res.status(status).json({ error: code });
+    }
     return;
   }
 
-  logEvent({
-    event: 'admin.coins_grant',
-    actorId: admin.id,
-    actorName: admin.username,
-    targetId: result.playerId,
-    detail: { username: result.username, amount: result.amount, balance: result.balance, reason },
-    ip: req.ip,
-  });
-
-  try {
-    await import('./firebase').then(({ recordCoinAudit, syncPlayerProfile }) =>
-      Promise.all([
-        recordCoinAudit({
-          actorId: admin.id,
-          actorName: admin.username,
-          targetId: result.playerId,
-          targetName: result.username,
-          amount: result.amount,
-          reason,
-          balance: result.balance,
-        }),
-        (async () => {
-          const target = findUserById(result.playerId);
-          if (!target) return;
-          const profile = getProfile(result.playerId);
-          return syncPlayerProfile({
-            uid: result.playerId,
-            username: target.username,
-            isAdmin: target.isAdmin,
-            level: profile.level,
-            totalXp: profile.totalXp,
-            credits: profile.credits,
-          });
-        })(),
-      ]),
-    );
-  } catch (err) {
-    console.error('[firebase] coin sync failed', err);
-  }
-
+  const result = grantCoinsByUsername(username, amount);
+  if (!result.ok) { res.status(result.reason === 'not_found' ? 404 : 400).json({ error: result.reason }); return; }
+  logEvent({ event: 'admin.coins_grant', actorId: admin.id, actorName: admin.username, targetId: result.playerId, detail: { username: result.username, amount: result.amount, balance: result.balance, reason }, ip: req.ip });
   res.json({ ok: true, ...result, reason });
+});
+
+// Server-side Firebase identity check for future realtime/game APIs.
+authRouter.get('/auth/firebase-status', async (req, res) => {
+  if (!firebaseEnabled) { res.json({ enabled: false, authenticated: false, admin: false }); return; }
+  const { verifyFirebaseRequest } = await import('./firebase');
+  const token = await verifyFirebaseRequest(req);
+  res.json({ enabled: true, authenticated: !!token, admin: token?.admin === true, uid: token?.uid ?? null });
 });
