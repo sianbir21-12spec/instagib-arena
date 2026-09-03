@@ -11,7 +11,8 @@ const config = {
   messagingSenderId: (import.meta.env.VITE_FIREBASE_MESSAGING_SENDER_ID as string | undefined) || '104421879509',
   appId: (import.meta.env.VITE_FIREBASE_APP_ID as string | undefined) || '1:104421879509:web:d46548af5b436c3a44fc5c',
 };
-const databaseURL = `https://${projectId}-default-rtdb.firebaseio.com`;
+const databaseURL = (import.meta.env.VITE_FIREBASE_DATABASE_URL as string | undefined)?.trim()
+  || `https://${projectId}-default-rtdb.firebaseio.com`;
 
 function database() {
   const app = getApps().length ? getApp() : initializeApp(config);
