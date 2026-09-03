@@ -1,0 +1,15 @@
+{
+  "rules": {
+    "matches": {
+      "$matchId": {
+        "chat": {
+          ".read": "auth != null",
+          "$messageId": {
+            ".write": "auth != null && newData.exists() && newData.child('uid').val() == auth.uid && newData.child('bot').val() == false && newData.child('text').isString() && newData.child('text').val().length > 0 && newData.child('text').val().length <= 300",
+            ".validate": "newData.hasChildren(['uid','username','text','bot','createdAt'])"
+          }
+        }
+      }
+    }
+  }
+}
