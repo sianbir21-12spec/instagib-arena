@@ -20,7 +20,6 @@ import {
   createFirebaseToken,
   findFirebasePlayerByUsername,
   firebaseEnabled,
-  getFirebaseCoins,
   grantFirebaseCoins,
   requireFirebaseAdmin,
   syncPlayerProfile,
@@ -28,22 +27,13 @@ import {
 import { getCoinsByUsername, grantCoinsByUsername } from './economy';
 
 export function adminUsernamesFromEnv(): string[] {
-  return (process.env.ADMIN_USERNAMES ?? '')
-    .split(/[,\s]+/)
-    .map((s) => s.trim().toLowerCase())
-    .filter(Boolean);
+  return (process.env.ADMIN_USERNAMES ?? '').split(/[,\s]+/).map((s) => s.trim().toLowerCase()).filter(Boolean);
 }
 
 const SESSION_COOKIE = 'igsession';
 const USERNAME_RE = /^[a-zA-Z0-9_]{3,20}$/;
 const SESSION_MAX_AGE = 1000 * 60 * 60 * 24 * 365;
-const cookieOpts = {
-  httpOnly: true,
-  sameSite: 'lax' as const,
-  secure: process.env.NODE_ENV === 'production',
-  maxAge: SESSION_MAX_AGE,
-  path: '/',
-};
+const cookieOpts = { httpOnly: true, sameSite: 'lax' as const, secure: process.env.NODE_ENV === 'production', maxAge: SESSION_MAX_AGE, path: '/' };
 
 function hashPw(password: string, salt: string): Buffer { return scryptSync(password, salt, 64); }
 function genId(): string { return randomBytes(12).toString('hex'); }
@@ -59,9 +49,7 @@ export function accountIdFromCookieHeader(header: string | undefined): string {
   for (const part of header.split(';')) {
     const i = part.indexOf('=');
     if (i < 0) continue;
-    if (part.slice(0, i).trim() === SESSION_COOKIE) {
-      return userIdFromSession(decodeURIComponent(part.slice(i + 1).trim()));
-    }
+    if (part.slice(0, i).trim() === SESSION_COOKIE) return userIdFromSession(decodeURIComponent(part.slice(i + 1).trim()));
   }
   return '';
 }
@@ -71,17 +59,11 @@ const ATTEMPT_WINDOW = 60_000;
 const ATTEMPT_MAX = 12;
 function rateLimited(ip: string, now: number): boolean {
   const a = attempts.get(ip);
-  if (!a || now > a.resetAt) {
-    attempts.set(ip, { n: 1, resetAt: now + ATTEMPT_WINDOW });
-    return false;
-  }
+  if (!a || now > a.resetAt) { attempts.set(ip, { n: 1, resetAt: now + ATTEMPT_WINDOW }); return false; }
   a.n += 1;
   return a.n > ATTEMPT_MAX;
 }
-setInterval(() => {
-  const now = Date.now();
-  for (const [ip, a] of attempts) if (now > a.resetAt) attempts.delete(ip);
-}, ATTEMPT_WINDOW).unref?.();
+setInterval(() => { const now = Date.now(); for (const [ip, a] of attempts) if (now > a.resetAt) attempts.delete(ip); }, ATTEMPT_WINDOW).unref?.();
 
 async function syncAccount(uid: string): Promise<void> {
   if (!firebaseEnabled) return;
@@ -95,21 +77,8 @@ async function syncAccount(uid: string): Promise<void> {
     level: profile.level,
     totalXp: profile.totalXp,
     credits: profile.credits,
-    stats: {
-      totalKills: profile.totalKills,
-      totalDeaths: profile.totalDeaths,
-      totalGames: profile.totalGames,
-      totalWins: profile.totalWins,
-      bestKillStreak: profile.bestKillStreak,
-      headshots: profile.headshots,
-      shotsFired: profile.shotsFired,
-      shotsHit: profile.shotsHit,
-      bestAccuracy: profile.bestAccuracy,
-    },
-    inventory: {
-      unlocked: profile.unlocked,
-      equipped: profile.equipped,
-    },
+    stats: profile.stats as unknown as Record<string, unknown>,
+    inventory: { unlocked: profile.unlocked, equipped: profile.equipped },
   });
 }
 
@@ -188,9 +157,6 @@ authRouter.post('/auth/firebase-token', async (req, res) => {
   }
 });
 
-// Firebase Auth custom claims are the preferred admin authority. The legacy
-// session check remains as a local-development/compatibility fallback only when
-// Firebase is not configured.
 async function requireAdmin(req: Request): Promise<{ id: string; username: string } | null> {
   if (firebaseEnabled) {
     const token = await requireFirebaseAdmin(req);
@@ -235,8 +201,7 @@ authRouter.post('/auth/admin/coins/grant', async (req, res) => {
       res.json({ ok: true, playerId: target.uid, username: target.username, amount: Math.trunc(amount), balance: result.balance, reason });
     } catch (err) {
       const code = err instanceof Error ? err.message : 'coin_error';
-      const status = code === 'invalid_amount' || code === 'coin_overflow' ? 400 : 503;
-      res.status(status).json({ error: code });
+      res.status(code === 'invalid_amount' || code === 'coin_overflow' ? 400 : 503).json({ error: code });
     }
     return;
   }
@@ -247,7 +212,6 @@ authRouter.post('/auth/admin/coins/grant', async (req, res) => {
   res.json({ ok: true, ...result, reason });
 });
 
-// Server-side Firebase identity check for future realtime/game APIs.
 authRouter.get('/auth/firebase-status', async (req, res) => {
   if (!firebaseEnabled) { res.json({ enabled: false, authenticated: false, admin: false }); return; }
   const { verifyFirebaseRequest } = await import('./firebase');
